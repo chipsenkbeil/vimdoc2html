@@ -1,0 +1,10 @@
+[package]
+name = "vimdoc2html"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.65"
+
+[dependencies]
+clap = { version = "4.0.32", features = ["derive"] }
+tree-sitter = "0.20.9"
+tree-sitter-vimdoc = { git = "https://github.com/neovim/tree-sitter-vimdoc", package = "tree-sitter-help" }
