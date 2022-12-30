@@ -41,11 +41,11 @@ fn main() {
     // If we are reading stdin, then we block until we get all input, feed it into our parser, and
     // then print out the results
     if should_read_stdin {
-        let tree = parse_into_tree(std::io::stdin(), &mut parser).unwrap();
+        let (src, tree) = parse_into_src_and_tree(std::io::stdin(), &mut parser).unwrap();
         let out = if debug_output {
             tree_into_debug_string(tree)
         } else {
-            tree_into_html_string(tree)
+            into_html_string(&src, tree)
         };
         println!("{out}");
         return;
@@ -58,12 +58,15 @@ fn main() {
     while let Some(path) = paths.pop_front() {
         if path.is_file() {
             let outfile = path.with_extension("html");
-            let tree = parse_into_tree(File::open(path).expect("Failed to open file"), &mut parser)
-                .unwrap();
+            let (src, tree) = parse_into_src_and_tree(
+                File::open(path).expect("Failed to open file"),
+                &mut parser,
+            )
+            .unwrap();
             let out = if debug_output {
                 tree_into_debug_string(tree)
             } else {
-                tree_into_html_string(tree)
+                into_html_string(&src, tree)
             };
             std::fs::write(outfile, out).expect("Failed to write output");
         } else if path.is_dir() {
@@ -94,15 +97,15 @@ fn make_vimdoc_parser() -> tree_sitter::Parser {
     parser
 }
 
-fn parse_into_tree<R: io::Read>(
-    mut reader: R,
+fn parse_into_src_and_tree<R: io::Read>(
+    reader: R,
     parser: &mut tree_sitter::Parser,
-) -> io::Result<tree_sitter::Tree> {
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf)?;
-    parser
-        .parse(buf, None)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Failed to parse vimdoc"))
+) -> io::Result<(String, tree_sitter::Tree)> {
+    let buf = std::io::read_to_string(reader)?;
+    let tree = parser
+        .parse(&buf, None)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Failed to parse vimdoc"))?;
+    Ok((buf, tree))
 }
 
 /// Converts [`tree_sitter::Tree`] into a debug [`String`].
@@ -135,54 +138,10 @@ fn tree_into_debug_string(tree: tree_sitter::Tree) -> String {
     output
 }
 
-/// Converts [`tree_sitter::Tree`] into an HTML [`String`].
-fn tree_into_html_string(tree: tree_sitter::Tree) -> String {
-    todo!();
-}
-
-/// Setting `show_anonymous` to true will include various kinds like `<`.
-///
-/// From https://github.com/jedthehumanoid/hecto.
-fn pretty_print(node: tree_sitter::Node, show_anonymous: bool) -> String {
-    let mut cursor = node.walk();
-    let mut indent = String::new();
-    let mut ret = String::new();
-    loop {
-        if cursor.node().is_named() || show_anonymous {
-            ret += &format!("{}{}\n", indent, cursor_pretty(&cursor));
-        }
-
-        if cursor.goto_first_child() {
-            indent += "  ";
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            continue;
-        }
-
-        // Retrace upwards until additional siblings are avaliable
-        loop {
-            if !cursor.goto_parent() {
-                return ret;
-            }
-            indent = indent[0..indent.len() - 2].to_string();
-
-            if cursor.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-}
-
-/// From https://github.com/jedthehumanoid/hecto.
-fn cursor_pretty(cursor: &tree_sitter::TreeCursor) -> String {
+/// Converts a `src` text and [`tree_sitter::Tree`] into an HTML [`String`].
+fn into_html_string(src: &str, tree: tree_sitter::Tree) -> String {
     format!(
-        "Name: {:?}, Kind: {:?} [Row:{}, Col:{}] - [Row:{}, Col:{}]",
-        cursor.field_name().unwrap_or_default(),
-        cursor.node().kind(),
-        cursor.node().start_position().row,
-        cursor.node().start_position().column,
-        cursor.node().end_position().row,
-        cursor.node().end_position().column,
+        "{:#?}",
+        types::HelpFile::from_cursor(src, &mut tree.walk()).unwrap()
     )
 }

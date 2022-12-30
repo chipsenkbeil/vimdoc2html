@@ -1,52 +1,51 @@
 use std::str::Utf8Error;
-use tree_sitter::{Node, TreeCursor};
+use tree_sitter::TreeCursor;
 
 #[derive(Debug)]
-pub enum FromCursorError<'a> {
+pub enum FromCursorError {
     MissingField {
-        name: &'a str,
-        node: Node<'a>,
+        name: &'static str,
+        node_kind: String,
     },
     TooManyChildren {
         expected: usize,
         actual: usize,
-        node: Node<'a>,
+        node_kind: String,
     },
     TypeError {
-        expected: &'a str,
-        actual: Node<'a>,
+        expected: String,
+        actual: String,
     },
     Utf8Error(Utf8Error),
 }
 
-impl std::fmt::Display for FromCursorError<'_> {
+impl std::fmt::Display for FromCursorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingField { name, node } => {
-                write!(f, "[{}] Missing {name}", node.kind())
+            Self::MissingField { name, node_kind } => {
+                write!(f, "[{}] Missing {name}", node_kind)
             }
             Self::TooManyChildren {
                 expected,
                 actual,
-                node,
+                node_kind,
             } => {
                 write!(
                     f,
-                    "[{}] Expected {expected} named children, but had {actual}",
-                    node.kind()
+                    "[{node_kind}] Expected {expected} named children, but had {actual}",
                 )
             }
             Self::TypeError { expected, actual } => {
-                write!(f, "Expected {expected}, but was actually {}", actual.kind())
+                write!(f, "Expected {expected}, but was actually {actual}")
             }
             Self::Utf8Error(x) => write!(f, "{x}"),
         }
     }
 }
 
-impl std::error::Error for FromCursorError<'_> {}
+impl std::error::Error for FromCursorError {}
 
-impl From<Utf8Error> for FromCursorError<'static> {
+impl From<Utf8Error> for FromCursorError {
     fn from(x: Utf8Error) -> Self {
         Self::Utf8Error(x)
     }
@@ -60,35 +59,32 @@ macro_rules! concat_kinds {
 
 macro_rules! from_cursor {
     ($name:ident, $($kind:ident = |$src:ident, $cursor:ident| $body:expr),+ $(,)?) => {
-        impl<'a> $name<'a> {
+        impl<'src, 'tree> $name<'src> {
             pub fn from_cursor(
-                src: impl AsRef<[u8]>,
-                cursor: &'a mut TreeCursor,
-            ) -> Result<$name<'a>, FromCursorError<'a>> {
+                src: &'src str,
+                cursor: &'tree mut TreeCursor,
+            ) -> Result<$name<'src>, FromCursorError> {
                 let node = cursor.node();
 
                 match node.kind() {
                     $(
                         stringify!($kind) => {
-                            fn _impl<'a>(
-                                $src: impl AsRef<[u8]>,
-                                $cursor: &'a mut TreeCursor,
-                            ) -> Result<$name<'a>, FromCursorError<'a>> {
+                            fn _impl<'src, 'tree>(
+                                $src: &'src str,
+                                $cursor: &'tree mut TreeCursor,
+                            ) -> Result<$name<'src>, FromCursorError> {
                                 Ok($body)
                             }
 
-                            let result = _impl(src.as_ref(), cursor);
-                            cursor.reset(node);
-                            result
+                            _impl(src.as_ref(), cursor)
                         }
                     )+
 
-                    x => {
-                        cursor.reset(node);
+                    _ => {
                         let expected = concat_kinds!($($kind,)+);
                         Err(FromCursorError::TypeError {
-                            expected,
-                            actual: node,
+                            expected: expected.to_string(),
+                            actual: node.kind().to_string(),
                         })
                     }
                 }
@@ -108,18 +104,18 @@ macro_rules! from_cursor_children {
                 let mut children = Vec::new();
 
                 if cursor.goto_first_child() {
-                    let mut node = cursor.node();
                     loop {
-                        if !node.is_named() {
-                            continue;
+                        let node = cursor.node();
+                        if node.is_named() {
+                            let child = $children::from_cursor(src.as_ref(), cursor)?;
+                            children.push(child);
                         }
-
-                        children.push($children::from_cursor(src.as_ref(), cursor)?);
 
                         if !cursor.goto_next_sibling() {
                             break;
                         }
                     }
+                    cursor.goto_parent();
                 }
 
                 $name { $field: children }
@@ -138,15 +134,14 @@ macro_rules! from_cursor_single_child {
 
                 if cursor.goto_first_child() {
                     let mut cnt = 0;
-                    let mut node = cursor.node();
                     loop {
-                        if !node.is_named() {
-                            continue;
-                        }
-
-                        cnt += 1;
-                        if cnt == 1 {
-                            $child_field = Some($child_struct::from_cursor(src.as_ref(), cursor)?);
+                        let node = cursor.node();
+                        if node.is_named() {
+                            cnt += 1;
+                            if cnt == 1 {
+                                let child = $child_struct::from_cursor(src.as_ref(), cursor)?;
+                                $child_field = Some(child);
+                            }
                         }
 
                         if !cursor.goto_next_sibling() {
@@ -154,11 +149,13 @@ macro_rules! from_cursor_single_child {
                         }
                     }
 
+                    cursor.goto_parent();
+
                     if cnt > 1 {
                         return Err(FromCursorError::TooManyChildren {
                             expected: 1,
                             actual: cnt,
-                            node,
+                            node_kind: node.kind().to_string(),
                         });
                     }
                 }
@@ -166,7 +163,7 @@ macro_rules! from_cursor_single_child {
                 if $child_field.is_none() {
                     return Err(FromCursorError::MissingField {
                         name: stringify!($child_field),
-                        node,
+                        node_kind: node.kind().to_string(),
                     });
                 }
 
@@ -273,29 +270,46 @@ pub struct Argument<'a> {
 from_cursor_single_child!(Argument, argument, text = Word);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Code<'a> {
+pub struct Codeblock<'a> {
+    pub language: Option<Language<'a>>,
     pub children: Vec<Line<'a>>,
 }
 
-from_cursor_children!(Code, code, Line);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Codeblock<'a> {
-    pub children: Vec<CodeblockChild<'a>>,
-}
-
-from_cursor_children!(Codeblock, codeblock, CodeblockChild);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CodeblockChild<'a> {
-    Code(Code<'a>),
-    Language(Language<'a>),
-}
-
 from_cursor!(
-    CodeblockChild,
-    code = |src, cursor| CodeblockChild::Code(Code::from_cursor(src, cursor)?),
-    language = |src, cursor| CodeblockChild::Language(Language::from_cursor(src, cursor)?),
+    Codeblock,
+    codeblock = |src, cursor| {
+        let mut language = None;
+        let mut children = Vec::new();
+
+        if cursor.goto_first_child() {
+            let mut looking_for_language = true;
+            loop {
+                let node = cursor.node();
+                if node.is_named() {
+                    // Language is optional and may appear first
+                    if looking_for_language {
+                        looking_for_language = false;
+
+                        language = Language::from_cursor(src, cursor).ok();
+
+                        // If no language first, try a line
+                        if language.is_none() {
+                            children.push(Line::from_cursor(src, cursor)?);
+                        }
+                    } else {
+                        children.push(Line::from_cursor(src, cursor)?);
+                    }
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            cursor.goto_parent();
+        }
+
+        Codeblock { language, children }
+    }
 );
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -341,26 +355,29 @@ from_cursor!(
 
         if cursor.goto_first_child() {
             let mut looking_for_name = true;
-            let mut node = cursor.node();
             loop {
-                if !node.is_named() {
-                    continue;
-                }
-
-                if looking_for_name {
-                    name = Some(UppercaseName::from_cursor(src.as_ref(), cursor)?);
-                } else {
-                    children.push(HChild::from_cursor(src.as_ref(), cursor)?);
+                let node = cursor.node();
+                if node.is_named() {
+                    if looking_for_name {
+                        name = Some(UppercaseName::from_cursor(src, cursor)?);
+                        looking_for_name = false;
+                    } else {
+                        children.push(HChild::from_cursor(src, cursor)?);
+                    }
                 }
 
                 if !cursor.goto_next_sibling() {
                     break;
                 }
             }
+            cursor.goto_parent();
         }
 
         if name.is_none() {
-            return Err(FromCursorError::MissingField { name: "name", node });
+            return Err(FromCursorError::MissingField {
+                name: "name",
+                node_kind: node.kind().to_string(),
+            });
         }
 
         H3 {
