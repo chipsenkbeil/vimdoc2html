@@ -4,6 +4,8 @@ use std::fs::File;
 use std::io;
 use std::path::PathBuf;
 
+mod types;
+
 /// Convert vimdoc into html.
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -41,7 +43,7 @@ fn main() {
     if should_read_stdin {
         let tree = parse_into_tree(std::io::stdin(), &mut parser).unwrap();
         let out = if debug_output {
-            tree_into_debug_string(tree, /* pretty */ true)
+            tree_into_debug_string(tree)
         } else {
             tree_into_html_string(tree)
         };
@@ -59,7 +61,7 @@ fn main() {
             let tree = parse_into_tree(File::open(path).expect("Failed to open file"), &mut parser)
                 .unwrap();
             let out = if debug_output {
-                tree_into_debug_string(tree, /* pretty */ true)
+                tree_into_debug_string(tree)
             } else {
                 tree_into_html_string(tree)
             };
@@ -103,25 +105,44 @@ fn parse_into_tree<R: io::Read>(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Failed to parse vimdoc"))
 }
 
-/// Converts [`tree_sitter::Tree`] into a debug [`String`]. If `pretty` is true, will perform line
-/// breaks and indentation for the output.
-fn tree_into_debug_string(tree: tree_sitter::Tree, pretty: bool) -> String {
-    // Creates an sexp string that is all on one line
-    let raw_out = tree.root_node().to_sexp();
+/// Converts [`tree_sitter::Tree`] into a debug [`String`].
+fn tree_into_debug_string(tree: tree_sitter::Tree) -> String {
+    let mut output = String::new();
 
-    if pretty {
-        pretty_print(tree.root_node(), /* show_anonymous */ true)
-    } else {
-        raw_out
+    fn parent_cnt(node: &tree_sitter::Node) -> usize {
+        match node.parent() {
+            Some(node) => 1 + parent_cnt(&node),
+            None => 0,
+        }
     }
+
+    for node in tree_sitter_traversal::traverse_tree(&tree, tree_sitter_traversal::Order::Pre) {
+        if node.is_named() {
+            let depth = parent_cnt(&node);
+
+            output.push_str(&format!(
+                "{}Kind: {:?} [Row:{}, Col:{}] - [Row:{}, Col:{}]\n",
+                " ".repeat(depth * 4),
+                node.kind(),
+                node.start_position().row,
+                node.start_position().column,
+                node.end_position().row,
+                node.end_position().column,
+            ));
+        }
+    }
+
+    output
 }
 
 /// Converts [`tree_sitter::Tree`] into an HTML [`String`].
-fn tree_into_html_string(_tree: tree_sitter::Tree) -> String {
+fn tree_into_html_string(tree: tree_sitter::Tree) -> String {
     todo!();
 }
 
-// From https://github.com/jedthehumanoid/hecto
+/// Setting `show_anonymous` to true will include various kinds like `<`.
+///
+/// From https://github.com/jedthehumanoid/hecto.
 fn pretty_print(node: tree_sitter::Node, show_anonymous: bool) -> String {
     let mut cursor = node.walk();
     let mut indent = String::new();
@@ -153,15 +174,11 @@ fn pretty_print(node: tree_sitter::Node, show_anonymous: bool) -> String {
     }
 }
 
-// From https://github.com/jedthehumanoid/hecto
+/// From https://github.com/jedthehumanoid/hecto.
 fn cursor_pretty(cursor: &tree_sitter::TreeCursor) -> String {
-    let field_name = match cursor.field_name() {
-        Some(name) => String::from(name) + ": ",
-        None => String::from(""),
-    };
     format!(
         "Name: {:?}, Kind: {:?} [Row:{}, Col:{}] - [Row:{}, Col:{}]",
-        field_name,
+        cursor.field_name().unwrap_or_default(),
         cursor.node().kind(),
         cursor.node().start_position().row,
         cursor.node().start_position().column,
