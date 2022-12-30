@@ -22,6 +22,10 @@ struct Args {
     #[arg(long)]
     debug_output: bool,
 
+    /// If specified, will not print anything to stdout.
+    #[arg(short, long)]
+    quiet: bool,
+
     /// Paths to convert from vimdoc into html. If no paths are provided, will read vimdoc from
     /// stdin until EOF detected and then print out the html.
     paths: Vec<PathBuf>,
@@ -32,6 +36,7 @@ fn main() {
         extensions,
         recursive,
         debug_output,
+        quiet,
         paths,
     } = <Args as clap::Parser>::parse();
     let should_read_stdin = paths.is_empty();
@@ -58,6 +63,10 @@ fn main() {
     while let Some(path) = paths.pop_front() {
         if path.is_file() {
             let outfile = path.with_extension("html");
+            if !quiet {
+                println!("Converting {path:?} into {outfile:?}");
+            }
+
             let (src, tree) = parse_into_src_and_tree(
                 File::open(path).expect("Failed to open file"),
                 &mut parser,

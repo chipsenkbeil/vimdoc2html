@@ -1,44 +1,61 @@
 use std::str::Utf8Error;
-use tree_sitter::TreeCursor;
+use tree_sitter::{Point, TreeCursor};
 
 #[derive(Debug)]
 pub enum FromCursorError {
     MissingField {
+        start: Point,
         name: &'static str,
         node_kind: String,
     },
     TooManyChildren {
+        start: Point,
         expected: usize,
         actual: usize,
         node_kind: String,
     },
     TypeError {
+        start: Point,
         expected: String,
         actual: String,
     },
-    Utf8Error(Utf8Error),
+    Utf8Error {
+        err: Utf8Error,
+    },
 }
 
 impl std::fmt::Display for FromCursorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingField { name, node_kind } => {
-                write!(f, "[{}] Missing {name}", node_kind)
+            Self::MissingField {
+                start,
+                name,
+                node_kind,
+            } => {
+                write!(f, "[{} @ {start}] Missing {name}", node_kind)
             }
             Self::TooManyChildren {
+                start,
                 expected,
                 actual,
                 node_kind,
             } => {
                 write!(
                     f,
-                    "[{node_kind}] Expected {expected} named children, but had {actual}",
+                    "[{node_kind} @ {start}] Expected {expected} named children, but had {actual}",
                 )
             }
-            Self::TypeError { expected, actual } => {
-                write!(f, "Expected {expected}, but was actually {actual}")
+            Self::TypeError {
+                start,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "[@ {start}] Expected {expected}, but was actually {actual}"
+                )
             }
-            Self::Utf8Error(x) => write!(f, "{x}"),
+            Self::Utf8Error { err } => write!(f, "{err}"),
         }
     }
 }
@@ -47,7 +64,7 @@ impl std::error::Error for FromCursorError {}
 
 impl From<Utf8Error> for FromCursorError {
     fn from(x: Utf8Error) -> Self {
-        Self::Utf8Error(x)
+        Self::Utf8Error { err: x }
     }
 }
 
@@ -83,6 +100,7 @@ macro_rules! from_cursor {
                     _ => {
                         let expected = concat_kinds!($($kind,)+);
                         Err(FromCursorError::TypeError {
+                            start: node.start_position(),
                             expected: expected.to_string(),
                             actual: node.kind().to_string(),
                         })
@@ -153,6 +171,7 @@ macro_rules! from_cursor_single_child {
 
                     if cnt > 1 {
                         return Err(FromCursorError::TooManyChildren {
+                            start: node.start_position(),
                             expected: 1,
                             actual: cnt,
                             node_kind: node.kind().to_string(),
@@ -162,6 +181,7 @@ macro_rules! from_cursor_single_child {
 
                 if $child_field.is_none() {
                     return Err(FromCursorError::MissingField {
+                        start: node.start_position(),
                         name: stringify!($child_field),
                         node_kind: node.kind().to_string(),
                     });
@@ -375,6 +395,7 @@ from_cursor!(
 
         if name.is_none() {
             return Err(FromCursorError::MissingField {
+                start: node.start_position(),
                 name: "name",
                 node_kind: node.kind().to_string(),
             });
