@@ -1,5 +1,53 @@
 use std::str::Utf8Error;
-use tree_sitter::{Point, TreeCursor};
+use tree_sitter::{Node, Point, TreeCursor};
+
+#[derive(Clone, Debug)]
+pub enum InvalidNode {
+    Error { start: Point, details: String },
+    Missing { start: Point, details: String },
+}
+
+impl InvalidNode {
+    pub fn from_node_ref(node: &Node) -> Option<Self> {
+        if node.is_error() {
+            return Some(Self::Error {
+                start: node.start_position(),
+                details: node.to_sexp(),
+            });
+        }
+
+        if node.is_missing() {
+            return Some(Self::Missing {
+                start: node.start_position(),
+                details: node.to_sexp(),
+            });
+        }
+
+        None
+    }
+
+    pub fn start(&self) -> Point {
+        match self {
+            Self::Error { start, .. } => *start,
+            Self::Missing { start, .. } => *start,
+        }
+    }
+
+    pub fn details(&self) -> &str {
+        match self {
+            Self::Error { details, .. } => details,
+            Self::Missing { details, .. } => details,
+        }
+    }
+
+    pub fn report(&self) {
+        eprintln!(
+            "Encountered invalid node @ {}: {}",
+            self.start(),
+            self.details()
+        );
+    }
+}
 
 #[derive(Debug)]
 pub enum FromCursorError {
@@ -124,7 +172,10 @@ macro_rules! from_cursor_children {
                 if cursor.goto_first_child() {
                     loop {
                         let node = cursor.node();
-                        if node.is_named() {
+
+                        if let Some(invalid_node) = InvalidNode::from_node_ref(&node) {
+                            invalid_node.report();
+                        } else if node.is_named() {
                             let child = $children::from_cursor(src.as_ref(), cursor)?;
                             children.push(child);
                         }
@@ -154,7 +205,9 @@ macro_rules! from_cursor_single_child {
                     let mut cnt = 0;
                     loop {
                         let node = cursor.node();
-                        if node.is_named() {
+                        if let Some(invalid_node) = InvalidNode::from_node_ref(&node) {
+                            invalid_node.report();
+                        } else if node.is_named() {
                             cnt += 1;
                             if cnt == 1 {
                                 let child = $child_struct::from_cursor(src.as_ref(), cursor)?;
@@ -305,7 +358,9 @@ from_cursor!(
             let mut looking_for_language = true;
             loop {
                 let node = cursor.node();
-                if node.is_named() {
+                if let Some(invalid_node) = InvalidNode::from_node_ref(&node) {
+                    invalid_node.report();
+                } else if node.is_named() {
                     // Language is optional and may appear first
                     if looking_for_language {
                         looking_for_language = false;
@@ -377,7 +432,9 @@ from_cursor!(
             let mut looking_for_name = true;
             loop {
                 let node = cursor.node();
-                if node.is_named() {
+                if let Some(invalid_node) = InvalidNode::from_node_ref(&node) {
+                    invalid_node.report();
+                } else if node.is_named() {
                     if looking_for_name {
                         name = Some(UppercaseName::from_cursor(src, cursor)?);
                         looking_for_name = false;
