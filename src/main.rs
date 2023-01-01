@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 mod parser;
-mod types;
+mod utils;
 
 use parser::*;
 
@@ -47,13 +47,16 @@ fn main() {
     // then print out the results
     if should_read_stdin {
         let parser = Parser::load_vimdoc(std::io::stdin()).expect("Failed to load parser");
-        let out = if debug_output {
-            parser.to_tree_debug_string()
+        let out: String = if debug_output {
+            parser
+                .parse::<DebugString>()
+                .expect("Failed to parse into debug")
+                .into()
         } else {
-            format!(
-                "{:#?}",
-                parser.parse().expect("Failed to parse into vimdoc")
-            )
+            parser
+                .parse::<HtmlString>()
+                .expect("Failed to parse into HTML")
+                .into()
         };
         println!("{out}");
         return;
@@ -72,13 +75,16 @@ fn main() {
 
             let parser = Parser::load_vimdoc(File::open(path).expect("Failed to open file"))
                 .expect("Failed to load parser");
-            let out = if debug_output {
-                parser.to_tree_debug_string()
+            let out: String = if debug_output {
+                parser
+                    .parse::<DebugString>()
+                    .expect("Failed to parse into debug")
+                    .into()
             } else {
-                format!(
-                    "{:#?}",
-                    parser.parse().expect("Failed to parse into vimdoc")
-                )
+                parser
+                    .parse::<HtmlString>()
+                    .expect("Failed to parse into HTML")
+                    .into()
             };
             std::fs::write(outfile, out).expect("Failed to write output");
         } else if path.is_dir() {
