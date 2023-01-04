@@ -124,28 +124,28 @@ pub trait Visitor {
         }
     }
 
-    fn visit_children_named<'src, 'tree, J: Joiner<Output = Self::Output>>(
+    /// Visits all immediate named children nodes from the root defined in the [`Context]. The root
+    /// node itself is NOT visited. Returns a collection of outputs.
+    fn visit_children_named<'src, 'tree>(
         &mut self,
         ctx: &mut Context<'src, 'tree, '_>,
-        joiner: &J,
-    ) -> Self::Output {
-        self.visit_children(ctx, joiner, /* unnamed */ false)
+    ) -> Vec<Self::Output> {
+        self.visit_children(ctx, /* unnamed */ false)
     }
 
     /// Visits all immediate children nodes from the root defined in the [`Context]. The root node
-    /// itself is NOT visited.
+    /// itself is NOT visited. Returns a collection of outputs.
     ///
     /// If `unnamed` is true, then nodes that are unnamed will also be visited.
-    fn visit_children<'src, 'tree, J: Joiner<Output = Self::Output>>(
+    fn visit_children<'src, 'tree>(
         &mut self,
         ctx: &mut Context<'src, 'tree, '_>,
-        joiner: &J,
         unnamed: bool,
-    ) -> Self::Output {
+    ) -> Vec<Self::Output> {
         let mut outputs = Vec::new();
 
         if !ctx.cursor.goto_first_child() {
-            return joiner.join(outputs);
+            return outputs;
         }
 
         loop {
@@ -154,7 +154,7 @@ pub trait Visitor {
             }
 
             if !ctx.cursor.goto_next_sibling() {
-                return joiner.join(outputs);
+                return outputs;
             }
         }
     }
@@ -194,8 +194,13 @@ impl<'src, 'tree> Context<'src, 'tree, '_> {
     /// Returns cleaned text represented by the node being visited.
     #[inline]
     pub fn node_clean_text(&self) -> String {
-        self.node_raw_text()
-            .replace('&', "&amp;")
+        self.clean_text(self.node_raw_text())
+    }
+
+    /// Cleans the provided text.
+    #[inline]
+    pub fn clean_text(&self, s: &str) -> String {
+        s.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
     }
